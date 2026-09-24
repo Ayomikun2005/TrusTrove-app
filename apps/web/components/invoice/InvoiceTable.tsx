@@ -48,10 +48,30 @@ interface InvoiceTableProps {
   emptyStateDescription?: string;
   emptyStateAction?: EmptyStateAction;
   pagination?: InvoicePaginationProps;
+  /**
+   * Opt into multi-select mode: adds a checkbox per row, a "select all on
+   * page" checkbox in the header, and a selection toolbar. Off by default, so
+   * existing single-select callers are unaffected.
+   */
+  selectable?: boolean;
+  /**
+   * Selected invoice ids. Passing this makes the selection controlled; omit it
+   * to let the table track its own selection internally.
+   */
+  selectedIds?: string[];
+  /** Called with the next set of selected ids whenever the selection changes. */
+  onSelectionChange?: (ids: string[]) => void;
 }
 
 const DEFAULT_PAGE_SIZES = [10, 20, 50, 100];
 const ROW_HEIGHT = 72;
+
+// The checkbox column is fixed-width so it does not steal space from the six
+// proportional data columns below.
+const SELECT_COL_FLEX = "0 0 2.5rem";
+
+const CHECKBOX_CLASSES =
+  "h-4 w-4 cursor-pointer accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-1 focus-visible:ring-offset-[#080c10]";
 
 // Shared flex proportions matching the 6-column layout.
 const COL_FLEX = ["1.15", "1.15", "1", "0.8", "0.95", "0.75"] as const;
@@ -247,12 +267,78 @@ export function InvoiceTable({
   emptyStateDescription,
   emptyStateAction,
   pagination,
+  selectable = false,
+  selectedIds,
+  onSelectionChange,
 }: InvoiceTableProps) {
   const parentRef = useRef<HTMLTableSectionElement | null>(null);
   // rowRefs tracks rendered <tr> elements so the roving-tabindex effect can
   // imperatively focus the newly active row after an arrow-key press.
   const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
   const [focusedIndex, setFocusedIndex] = useState(0);
+  // Uncontrolled fallback: used only while `selectedIds` is not supplied.
+  const [internalSelectedIds, setInternalSelectedIds] = useState<string[]>([]);
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
+
+  const isSelectionControlled = selectedIds !== undefined;
+  const selection = isSelectionControlled ? selectedIds : internalSelectedIds;
+
+  const selectedSet = useMemo(() => new Set(selection), [selection]);
+
+  const commitSelection = useCallback(
+    (next: string[]) => {
+      if (!isSelectionControlled) setInternalSelectedIds(next);
+      onSelectionChange?.(next);
+    },
+    [isSelectionControlled, onSelectionChange],
+  );
+
+  const toggleRowSelection = useCallback(
+    (id: string) => {
+      const next = selectedSet.has(id)
+        ? selection.filter((selectedId) => selectedId !== id)
+        : [...selection, id];
+      commitSelection(next);
+    },
+    [commitSelection, selectedSet, selection],
+  );
+
+  const pageIds = useMemo(
+    () => invoices.map((invoice) => invoice.id),
+    [invoices],
+  );
+  const selectedOnPageCount = useMemo(
+    () => pageIds.filter((id) => selectedSet.has(id)).length,
+    [pageIds, selectedSet],
+  );
+  const allOnPageSelected =
+    pageIds.length > 0 && selectedOnPageCount === pageIds.length;
+
+  // "Select all" is scoped to the current page, so selections made on other
+  // pages survive paging back and forth.
+  const toggleAllOnPage = useCallback(() => {
+    if (allOnPageSelected) {
+      const pageIdSet = new Set(pageIds);
+      commitSelection(selection.filter((id) => !pageIdSet.has(id)));
+      return;
+    }
+    const merged = new Set(selection);
+    pageIds.forEach((id) => merged.add(id));
+    commitSelection(Array.from(merged));
+  }, [allOnPageSelected, commitSelection, pageIds, selection]);
+
+  const clearSelection = useCallback(
+    () => commitSelection([]),
+    [commitSelection],
+  );
+
+  // `indeterminate` is a DOM-only property, so it has to be set imperatively.
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate =
+        selectedOnPageCount > 0 && !allOnPageSelected;
+    }
+  }, [selectedOnPageCount, allOnPageSelected]);
 
   // Move DOM focus whenever the roving index changes.
   useEffect(() => {
@@ -265,6 +351,9 @@ export function InvoiceTable({
   const handleRowKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTableRowElement>, index: number) => {
       if (!onSelectInvoice) return;
+      // Keys pressed inside the row checkbox belong to the checkbox: without
+      // this, Space would both toggle it and fire onSelectInvoice.
+      if (event.target !== event.currentTarget) return;
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();
@@ -349,6 +438,29 @@ export function InvoiceTable({
         </div>
       </div>
 
+      {selectable && (
+        <div
+          className="flex items-center justify-between gap-3 border-b border-border/60 bg-[#080c10]/50 px-4 py-2.5 sm:px-5"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            {selection.length} selected
+          </span>
+          {selection.length > 0 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="border-border bg-[#0b1117] text-[10px] font-bold uppercase tracking-wider text-slate-200 hover:bg-slate-900 hover:text-white"
+              onClick={clearSelection}
+            >
+              Clear selection
+            </Button>
+          )}
+        </div>
+      )}
+
       {invoices.length === 0 ? (
         <div className="bg-[#080c10]/40">{emptyNode}</div>
       ) : (
@@ -364,6 +476,22 @@ export function InvoiceTable({
             >
               <thead style={{ display: "block" }}>
                 <tr className="flex border-b border-border/60 bg-[#080c10]/80 px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                  {selectable && (
+                    <th
+                      scope="col"
+                      style={{ flex: SELECT_COL_FLEX }}
+                      className="text-left"
+                    >
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        className={CHECKBOX_CLASSES}
+                        checked={allOnPageSelected}
+                        onChange={toggleAllOnPage}
+                        aria-label="Select all invoices on this page"
+                      />
+                    </th>
+                  )}
                   <th
                     scope="col"
                     style={{ flex: COL_FLEX[0] }}
@@ -424,6 +552,7 @@ export function InvoiceTable({
                 {rowsToRender.map((virtualRow) => {
                   const invoice = invoices[virtualRow.index];
                   const isActive = activeId === invoice.id;
+                  const isChecked = selectedSet.has(invoice.id);
 
                   const isFocusable = !!onSelectInvoice;
                   return (
@@ -433,7 +562,7 @@ export function InvoiceTable({
                         if (el) rowRefs.current.set(virtualRow.index, el);
                         else rowRefs.current.delete(virtualRow.index);
                       }}
-                      aria-selected={isActive}
+                      aria-selected={selectable ? isChecked : isActive}
                       // Roving tabindex: only the focused row is in the tab order.
                       tabIndex={
                         isFocusable
@@ -466,6 +595,22 @@ export function InvoiceTable({
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
                     >
+                      {selectable && (
+                        <td
+                          style={{ flex: SELECT_COL_FLEX }}
+                          // Clicking the checkbox must not also trigger the
+                          // row's single-select handler.
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            className={CHECKBOX_CLASSES}
+                            checked={isChecked}
+                            onChange={() => toggleRowSelection(invoice.id)}
+                            aria-label={`Select invoice ${invoice.id}`}
+                          />
+                        </td>
+                      )}
                       <td
                         style={{ flex: COL_FLEX[0] }}
                         className="font-bold text-primary"
