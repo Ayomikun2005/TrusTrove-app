@@ -63,4 +63,89 @@ describe("InvoiceTable", () => {
     fireEvent.click(screen.getByRole("button", { name: /Next/i }));
     expect(onPageChange).toHaveBeenCalledWith(2);
   });
+
+  // #802 — semantic table structure
+  it("renders a <table> element with role=grid and aria-label", () => {
+    render(<InvoiceTable invoices={mockInvoices as any} />);
+    const table = screen.getByRole("grid", { name: /Invoice Ledger/i });
+    expect(table.tagName).toBe("TABLE");
+  });
+
+  it("renders column headers as <th scope=col> elements", () => {
+    render(<InvoiceTable invoices={mockInvoices as any} />);
+    const headers = screen.getAllByRole("columnheader");
+    expect(headers).toHaveLength(6);
+    expect(headers[0]).toHaveTextContent(/Invoice ID/i);
+    expect(headers[1]).toHaveTextContent(/Buyer/i);
+    expect(headers[2]).toHaveTextContent(/Face Value/i);
+    expect(headers[3]).toHaveTextContent(/Discount/i);
+    expect(headers[4]).toHaveTextContent(/Due Date/i);
+    expect(headers[5]).toHaveTextContent(/Status/i);
+    headers.forEach((h) => expect(h).toHaveAttribute("scope", "col"));
+  });
+
+  it("renders invoice data inside <td> cells within <tr> rows", () => {
+    render(<InvoiceTable invoices={mockInvoices as any} />);
+    const rows = screen.getAllByRole("row");
+    // one header row + two data rows
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    const cells = screen.getAllByRole("cell");
+    expect(cells.length).toBeGreaterThan(0);
+  });
+
+  it("marks the active row with aria-selected=true", () => {
+    render(<InvoiceTable invoices={mockInvoices as any} activeId="1" />);
+    const rows = screen.getAllByRole("row");
+    const activeRow = rows.find((r) => r.getAttribute("aria-selected") === "true");
+    expect(activeRow).toBeTruthy();
+  });
+
+  // #803 — roving-tabindex keyboard navigation
+  it("only the first data row has tabIndex=0 initially when selectable", () => {
+    const onSelectInvoice = vi.fn();
+    render(
+      <InvoiceTable invoices={mockInvoices as any} onSelectInvoice={onSelectInvoice} />,
+    );
+    const rows = screen.getAllByRole("row");
+    // rows[0] is the header row (<tr> in <thead>), rows[1] and rows[2] are data rows
+    const dataRows = rows.filter((r) => r.getAttribute("tabindex") !== null);
+    const tabZeroRows = dataRows.filter((r) => r.getAttribute("tabindex") === "0");
+    expect(tabZeroRows).toHaveLength(1);
+  });
+
+  it("data rows have no tabIndex when onSelectInvoice is not provided", () => {
+    render(<InvoiceTable invoices={mockInvoices as any} />);
+    const rows = screen.getAllByRole("row");
+    const focusableDataRows = rows.filter(
+      (r) => r.getAttribute("tabindex") !== null,
+    );
+    expect(focusableDataRows).toHaveLength(0);
+  });
+
+  it("ArrowDown moves focus to the next row", () => {
+    const onSelectInvoice = vi.fn();
+    render(
+      <InvoiceTable invoices={mockInvoices as any} onSelectInvoice={onSelectInvoice} />,
+    );
+    const rows = screen.getAllByRole("row");
+    const firstDataRow = rows.find((r) => r.getAttribute("tabindex") === "0");
+    expect(firstDataRow).toBeTruthy();
+    fireEvent.keyDown(firstDataRow!, { key: "ArrowDown" });
+    const rowsAfter = screen.getAllByRole("row");
+    const newFocused = rowsAfter.find((r) => r.getAttribute("tabindex") === "0");
+    expect(newFocused).not.toBe(firstDataRow);
+  });
+
+  it("Enter key calls onSelectInvoice for the focused row", () => {
+    const onSelectInvoice = vi.fn();
+    render(
+      <InvoiceTable invoices={mockInvoices as any} onSelectInvoice={onSelectInvoice} />,
+    );
+    const rows = screen.getAllByRole("row");
+    const firstDataRow = rows.find((r) => r.getAttribute("tabindex") === "0");
+    fireEvent.keyDown(firstDataRow!, { key: "Enter" });
+    expect(onSelectInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({ id: mockInvoices[0].id }),
+    );
+  });
 });
