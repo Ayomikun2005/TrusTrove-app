@@ -1,51 +1,44 @@
 package api
 
 import (
-	"context"
 	"sync"
 	"time"
 )
 
-// DefaultCacheTTL is the standard duration for which API responses are cached.
-const DefaultCacheTTL = 30 * time.Second
-
-// TTLCache provides a generic, thread-safe cache with a time-to-live.
-type TTLCache[T any] struct {
-	mu     sync.RWMutex
-	data   T
-	cached time.Time
-	ttl    time.Duration
+type TTLCache struct {
+	items map[string]cacheItem
+	mu    sync.RWMutex
 }
 
-func NewTTLCache[T any](ttl time.Duration) *TTLCache[T] {
-	return &TTLCache[T]{
-		ttl: ttl,
+type cacheItem struct {
+	value      interface{}
+	expiration int64
+}
+
+func NewTTLCache() *TTLCache {
+	return &TTLCache{
+		items: make(map[string]cacheItem),
 	}
 }
 
-func (c *TTLCache[T]) GetOrUpdate(ctx context.Context, fetch func(context.Context) (T, error)) (T, error) {
-	c.mu.RLock()
-	if !c.cached.IsZero() && time.Since(c.cached) < c.ttl {
-		data := c.data
-		c.mu.RUnlock()
-		return data, nil
-	}
-	c.mu.RUnlock()
-
+func (c *TTLCache) Set(key string, value interface{}, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if !c.cached.IsZero() && time.Since(c.cached) < c.ttl {
-		return c.data, nil
+	c.items[key] = cacheItem{
+		value:      value,
+		expiration: time.Now().Add(ttl).UnixNano(),
 	}
+}
 
-	data, err := fetch(ctx)
-	if err != nil {
-		var zero T
-		return zero, err
+func (c *TTLCache) Get(key string) (interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	item, found := c.items[key]
+	if !found {
+		return nil, false
 	}
-
-	c.data = data
-	c.cached = time.Now()
-	return c.data, nil
+	if time.Now().UnixNano() > item.expiration {
+		return nil, false
+	}
+	return item.value, true
 }
